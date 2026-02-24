@@ -6,6 +6,7 @@ use App\Models\Room;
 use App\Models\GameMessage;
 use App\Services\GameMasterService;
 use App\Services\DiceService;
+use App\Events\GameMessageSent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -101,6 +102,9 @@ class GameMessageController extends Controller
                 'content' => $message,
             ]);
 
+            // Отправляем событие через WebSockets (ДОБАВЛЕНО)
+            broadcast(new GameMessageSent($userMessage, $room))->toOthers();
+
             // Очищаем кэш сообщений при новом сообщении
             Cache::tags(['room_' . $room->id . '_messages'])->flush();
 
@@ -110,13 +114,19 @@ class GameMessageController extends Controller
 
                 $roll = $this->dice->roll($difficulty);
 
-                GameMessage::create([
+                $systemMessage = GameMessage::create([
                     'room_id' => $room->id,
                     'role' => 'system',
                     'content' => $roll['message'],
                 ]);
 
+                // Отправляем системное сообщение через WebSockets (ДОБАВЛЕНО)
+                broadcast(new GameMessageSent($systemMessage, $room))->toOthers();
+
                 $aiResponse = $this->gm->processMessage($room, $user, $message, $roll['message']);
+
+                // Отправляем ответ AI через WebSockets (ДОБАВЛЕНО)
+                broadcast(new GameMessageSent($aiResponse, $room))->toOthers();
 
                 return response()->json([
                     'success' => true,
@@ -127,6 +137,9 @@ class GameMessageController extends Controller
             }
 
             $aiResponse = $this->gm->processMessage($room, $user, $message);
+
+            // Отправляем ответ AI через WebSockets (ДОБАВЛЕНО)
+            broadcast(new GameMessageSent($aiResponse, $room))->toOthers();
 
             return response()->json([
                 'success' => true,

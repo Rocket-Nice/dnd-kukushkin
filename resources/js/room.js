@@ -1,47 +1,139 @@
+import Echo from 'laravel-echo';
+import Pusher from 'pusher-js';
+
+window.Pusher = Pusher;
+
+window.Echo = new Echo({
+    broadcaster: 'pusher',
+    key: import.meta.env.VITE_PUSHER_APP_KEY,
+    cluster: import.meta.env.VITE_PUSHER_APP_CLUSTER,
+    forceTLS: true
+});
+
 class DnDRoom {
     constructor(roomId, userId) {
         console.log('DnDRoom initialized', { roomId, userId });
         
         this.roomId = roomId;
         this.userId = userId;
-        this.lastGameMessage = 0;
-        this.lastOocMessage = 0;
-        this.lastGameTimestamp = 0;
-        this.lastOocTimestamp = 0;
-        this.pollingInterval = null;
-        this.isPolling = false;
         this.csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
         
-        // Получаем начальные timestamp
-        this.initTimestamps();
         this.init();
-    }
-    
-    initTimestamps() {
-        const gameChat = document.getElementById('game-chat');
-        const oocChat = document.getElementById('ooc-chat');
-        
-        if (gameChat && gameChat.lastElementChild) {
-            const lastMsg = gameChat.lastElementChild;
-            this.lastGameTimestamp = lastMsg.dataset.timestamp || 0;
-            this.lastGameMessage = lastMsg.dataset.messageId || 0;
-        }
-        
-        if (oocChat && oocChat.lastElementChild) {
-            const lastMsg = oocChat.lastElementChild;
-            this.lastOocTimestamp = lastMsg.dataset.timestamp || 0;
-            this.lastOocMessage = lastMsg.dataset.messageId || 0;
-        }
+        this.initWebSockets();
+        this.scrollToBottom('game-chat');
+        this.scrollToBottom('ooc-chat');
     }
     
     init() {
-        console.log('Initializing room...');
         this.initGameChat();
         this.initOocChat();
         this.initDiceRoll();
-        this.startPolling();
-        this.scrollToBottom('game-chat');
-        this.scrollToBottom('ooc-chat');
+    }
+    
+    initWebSockets() {
+        // Слушаем игровые сообщения
+        window.Echo.channel(`room.${this.roomId}`)
+            .listen('GameMessageSent', (e) => {
+                this.addGameMessage(e);
+            })
+            .listen('OocMessageSent', (e) => {
+                this.addOocMessage(e);
+            })
+            .listen('RoomStatusUpdated', (e) => {
+                this.updateRoomStatus(e);
+                this.updatePlayersList(e.users);
+            });
+            
+        console.log('WebSockets initialized for room:', this.roomId);
+    }
+    
+    updateRoomStatus(data) {
+        const statusElement = document.querySelector('.status-badge');
+        if (statusElement) {
+            const statusText = data.status === 'waiting' ? 'Ожидание' : (data.status === 'playing' ? 'В игре' : 'Завершена');
+            const statusClass = data.status === 'waiting' ? 'bg-yellow-600' : (data.status === 'playing' ? 'bg-green-600' : 'bg-gray-600');
+            
+            statusElement.textContent = statusText;
+            statusElement.className = `px-2 py-1 rounded text-xs ${statusClass}`;
+        }
+        
+        // Если статус изменился на playing, активируем поля ввода
+        if (data.status === 'playing') {
+            const gameInput = document.getElementById('game-message-input');
+            const gameSubmit = document.querySelector('#game-message-form button[type="submit"]');
+            const rollBtn = document.getElementById('roll-dice');
+            
+            if (gameInput) gameInput.disabled = false;
+            if (gameSubmit) gameSubmit.disabled = false;
+            if (rollBtn) rollBtn.disabled = false;
+        }
+    }
+    
+    updatePlayersList(users) {
+        const container = document.querySelector('.players-container');
+        if (!container) return;
+        
+        // Обновляем заголовок с участниками
+        const headerElement = document.querySelector('.players-header');
+        if (headerElement) {
+            const maxPlayers = headerElement.dataset.max || '2';
+            headerElement.innerHTML = `Участники <span class="players-count">${users.length}</span>/${maxPlayers}`;
+        }
+        
+        // Очищаем и перестраиваем список
+        container.innerHTML = '';
+        
+        if (users.length === 0) {
+            container.innerHTML = '<div class="text-center text-gray-500 py-4">Нет участников</div>';
+            return;
+        }
+        
+        users.forEach(user => {
+            const readyClass = user.is_ready ? 'bg-green-900 bg-opacity-20' : 'bg-gray-700';
+            const readyIcon = user.is_ready ? '<span class="ml-1 text-xs text-green-400">✅</span>' : '';
+            
+            // Получаем русское название класса
+            let className = '';
+            if (user.character_class) {
+                const classMap = {
+                    'fighter': 'Воин',
+                    'wizard': 'Волшебник',
+                    'rogue': 'Плут',
+                    'cleric': 'Жрец',
+                    'ranger': 'Следопыт',
+                    'paladin': 'Паладин',
+                    'bard': 'Бард',
+                    'barbarian': 'Варвар'
+                };
+                className = classMap[user.character_class] || user.character_class;
+            }
+            
+            const stats = user.character_name ? 
+                `<div class="text-xs text-gray-400 truncate">
+                    ${className ? '<span class="text-purple-400">' + className + '</span> | ' : ''}
+                    HP: ${user.current_hp}/${user.max_hp} | AC: ${user.armor_class}
+                </div>` : '';
+            
+            const div = document.createElement('div');
+            div.className = `flex items-center justify-between p-2 ${readyClass} rounded-lg`;
+            div.dataset.userId = user.id;
+            
+            div.innerHTML = `
+                <div class="flex items-center space-x-2 min-w-0 flex-1">
+                    <div class="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center text-xs sm:text-sm font-bold flex-shrink-0">
+                        ${(user.character_name || user.name).charAt(0)}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="font-medium text-xs sm:text-sm truncate">
+                            ${user.character_name || user.name} ${readyIcon}
+                        </div>
+                        ${stats}
+                    </div>
+                </div>
+            `;
+            
+            container.appendChild(div);
+        });
     }
     
     initGameChat() {
@@ -145,193 +237,6 @@ class DnDRoom {
             const input = document.getElementById('game-message-input');
             input.value = message;
             document.getElementById('game-message-form').dispatchEvent(new Event('submit'));
-        });
-    }
-    
-    startPolling() {
-        if (this.pollingInterval) clearInterval(this.pollingInterval);
-        this.pollingInterval = setInterval(() => this.pollMessages(), 2000);
-        console.log('Polling started');
-    }
-    
-    async pollMessages() {
-        if (this.isPolling) return;
-        this.isPolling = true;
-        
-        try {
-            await Promise.all([
-                this.pollGameMessages(),
-                this.pollOocMessages(),
-                this.pollRoomStatus(),
-                this.pollPlayersList()
-            ]);
-        } catch (error) {
-            console.error('Polling error:', error);
-        } finally {
-            this.isPolling = false;
-        }
-    }
-    
-    async pollRoomStatus() {
-        try {
-            const response = await fetch(`/rooms/${this.roomId}/status`);
-            if (response.ok) {
-                const data = await response.json();
-                
-                // Обновляем статус на странице
-                const statusElement = document.querySelector('.status-badge');
-                if (statusElement) {
-                    const statusText = data.status === 'waiting' ? 'Ожидание' : (data.status === 'playing' ? 'В игре' : 'Завершена');
-                    const statusClass = data.status === 'waiting' ? 'bg-yellow-600' : (data.status === 'playing' ? 'bg-green-600' : 'bg-gray-600');
-                    
-                    statusElement.textContent = statusText;
-                    statusElement.className = `px-2 py-1 rounded text-xs ${statusClass}`;
-                }
-                
-                // Если статус изменился на playing, активируем поля ввода
-                if (data.status === 'playing') {
-                    const gameInput = document.getElementById('game-message-input');
-                    const gameSubmit = document.querySelector('#game-message-form button[type="submit"]');
-                    const rollBtn = document.getElementById('roll-dice');
-                    
-                    if (gameInput) gameInput.disabled = false;
-                    if (gameSubmit) gameSubmit.disabled = false;
-                    if (rollBtn) rollBtn.disabled = false;
-                }
-            }
-        } catch (error) {
-            console.error('Error checking room status:', error);
-        }
-    }
-    
-    async pollPlayersList() {
-        try {
-            const response = await fetch(`/rooms/${this.roomId}/status`);
-            if (response.ok) {
-                const data = await response.json();
-                
-                // Обновляем список игроков
-                const playersContainer = document.querySelector('.players-container');
-                if (playersContainer && data.users) {
-                    this.updatePlayersList(playersContainer, data.users);
-                }
-                
-                // Удаляем этот блок, так как обновление счетчика теперь в updatePlayersList
-                // const playersCount = document.querySelector('.players-count');
-                // if (playersCount) {
-                //     playersCount.textContent = `${data.users_count}/${data.users_count + (data.users_count < 4 ? '?' : '4')}`;
-                // }
-            }
-        } catch (error) {
-            console.error('Error updating players:', error);
-        }
-    }
-    
-    updatePlayersList(container, users) {
-        // Сохраняем текущие data-user-id для проверки изменений
-        const currentIds = new Set();
-        container.querySelectorAll('[data-user-id]').forEach(el => {
-            currentIds.add(el.dataset.userId);
-        });
-        
-        // Проверяем, есть ли новые игроки
-        let hasChanges = false;
-        users.forEach(user => {
-            if (!currentIds.has(String(user.id))) {
-                hasChanges = true;
-            }
-        });
-        
-        if (!hasChanges && users.length === currentIds.size) return;
-        
-        // Обновляем заголовок с участниками
-        const headerElement = document.querySelector('.players-header');
-        if (headerElement) {
-            const maxPlayers = headerElement.dataset.max || '2';
-            headerElement.innerHTML = `Участники <span class="players-count">${users.length}</span>/${maxPlayers}`;
-        }
-        
-        // Очищаем и перестраиваем список
-        container.innerHTML = '';
-        
-        if (users.length === 0) {
-            container.innerHTML = '<div class="text-center text-gray-500 py-4">Нет участников</div>';
-            return;
-        }
-        
-        users.forEach(user => {
-            const readyClass = user.is_ready ? 'bg-green-900 bg-opacity-20' : 'bg-gray-700';
-            const readyIcon = user.is_ready ? '<span class="ml-1 text-xs text-green-400">✅</span>' : '';
-            
-            // Получаем русское название класса
-            let className = '';
-            if (user.character_class) {
-                const classMap = {
-                    'fighter': 'Воин',
-                    'wizard': 'Волшебник',
-                    'rogue': 'Плут',
-                    'cleric': 'Жрец',
-                    'ranger': 'Следопыт',
-                    'paladin': 'Паладин',
-                    'bard': 'Бард',
-                    'barbarian': 'Варвар'
-                };
-                className = classMap[user.character_class] || user.character_class;
-            }
-            
-            const stats = user.character_name ? 
-                `<div class="text-xs text-gray-400 truncate">
-                    ${className ? '<span class="text-purple-400">' + className + '</span> | ' : ''}
-                    HP: ${user.current_hp}/${user.max_hp} | AC: ${user.armor_class}
-                </div>` : '';
-            
-            const div = document.createElement('div');
-            div.className = `flex items-center justify-between p-2 ${readyClass} rounded-lg`;
-            div.dataset.userId = user.id;
-            
-            div.innerHTML = `
-                <div class="flex items-center space-x-2 min-w-0 flex-1">
-                    <div class="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center text-xs sm:text-sm font-bold flex-shrink-0">
-                        ${(user.character_name || user.name).charAt(0)}
-                    </div>
-                    <div class="min-w-0 flex-1">
-                        <div class="font-medium text-xs sm:text-sm truncate">
-                            ${user.character_name || user.name} ${readyIcon}
-                        </div>
-                        ${stats}
-                    </div>
-                </div>
-            `;
-            
-            container.appendChild(div);
-        });
-    }
-    
-    async pollGameMessages() {
-        const response = await fetch(`/rooms/${this.roomId}/game-messages?after=${this.lastGameTimestamp}`);
-        if (!response.ok) return;
-        
-        const messages = await response.json();
-        if (messages.length > 0) {
-            console.log('New game messages:', messages);
-        }
-        
-        messages.forEach(msg => {
-            this.addGameMessage(msg);
-            this.lastGameTimestamp = Math.max(this.lastGameTimestamp, msg.created_at);
-            this.lastGameMessage = Math.max(this.lastGameMessage, msg.id);
-        });
-    }
-    
-    async pollOocMessages() {
-        const response = await fetch(`/rooms/${this.roomId}/ooc-messages?after=${this.lastOocTimestamp}`);
-        if (!response.ok) return;
-        
-        const messages = await response.json();
-        messages.forEach(msg => {
-            this.addOocMessage(msg);
-            this.lastOocTimestamp = Math.max(this.lastOocTimestamp, msg.created_at);
-            this.lastOocMessage = Math.max(this.lastOocMessage, msg.id);
         });
     }
     
