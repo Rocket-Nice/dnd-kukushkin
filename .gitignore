@@ -1,9 +1,9 @@
 /.phpunit.cache
 /node_modules
-/public/build
-/public/hot
-/public/storage
-/storage/*.key
+# /public/build
+# /public/hot
+# /public/storage
+# /storage/*.key
 # /vendor
 # .env
 # .env.backup
@@ -20,8 +20,8 @@ yarn-error.log
 .env*.local
 node_modules
 .phpunit.cache
-public/build
-public/hot
-public/storage
-storage/*.key
+# public/build
+# public/hot
+# public/storage
+# storage/*.key
 vendor
