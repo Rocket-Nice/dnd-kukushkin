@@ -140,20 +140,22 @@ class DnDRoom {
     
     initGameChat() {
         const form = document.getElementById('game-message-form');
-        if (!form) {
-            console.log('Game chat form not found');
-            return;
-        }
+        if (!form) return;
         
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const input = document.getElementById('game-message-input');
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const rollBtn = document.getElementById('roll-dice');
             const message = input.value.trim();
             
             if (!message) return;
             
+            // Disable все кнопки
             input.disabled = true;
+            submitBtn.disabled = true;
+            if (rollBtn) rollBtn.disabled = true;
             
             try {
                 const response = await fetch(`/public/rooms/${this.roomId}/game-messages`, {
@@ -178,7 +180,10 @@ class DnDRoom {
                 console.error('Error:', error);
                 this.showError('Ошибка соединения');
             } finally {
+                // Enable кнопки обратно
                 input.disabled = false;
+                submitBtn.disabled = false;
+                if (rollBtn) rollBtn.disabled = false;
                 input.focus();
             }
         });
@@ -229,12 +234,20 @@ class DnDRoom {
         if (!rollBtn) return;
         
         rollBtn.addEventListener('click', () => {
-            const difficulty = prompt('Введите сложность (или оставьте пустым для обычного броска):', '');
+            // Проверяем, является ли пользователь создателем комнаты
+            const isCreator = document.querySelector('[data-user-id]')?.dataset.userId === 
+                            document.querySelector('[data-creator-id]')?.dataset.creatorId;
             
             let message = '/roll';
-            if (difficulty && !isNaN(difficulty) && difficulty > 0) {
-                message += ' ' + difficulty;
+            
+            if (isCreator) {
+                // Только создатель может вводить сложность
+                const difficulty = prompt('Введите сложность (или оставьте пустым для обычного броска):', '');
+                if (difficulty && !isNaN(difficulty) && difficulty > 0) {
+                    message += ' ' + difficulty;
+                }
             }
+            // Остальные просто кидают /roll без сложности
             
             const input = document.getElementById('game-message-input');
             input.value = message;

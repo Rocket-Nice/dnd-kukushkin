@@ -3,7 +3,10 @@
 @section('title', $room->name)
 
 @section('content')
-<div data-room-id="{{ $room->id }}" data-user-id="{{ Auth::id() }}" class="min-h-screen bg-gray-900">
+<div data-room-id="{{ $room->id }}" 
+     data-user-id="{{ Auth::id() }}" 
+     data-creator-id="{{ $room->created_by }}" 
+     class="min-h-screen bg-gray-900">
     <!-- Шапка комнаты с кнопками управления -->
     <div class="bg-gray-800 border-b border-gray-700 px-4 sm:px-6 py-4">
         <div class="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
