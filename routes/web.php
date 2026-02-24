@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Redis;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RoomController;
 use App\Http\Controllers\GameMessageController;

@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class GameMessageController extends Controller
 {
@@ -27,43 +28,47 @@ class GameMessageController extends Controller
     {
         try {
             $after = $request->get('after', 0);
-            $timestamp = date('Y-m-d H:i:s', $after);
+            $cacheKey = 'room_' . $room->id . '_messages_after_' . $after;
             
-            $messages = $room->gameMessages()
-                ->with('user')
-                ->where('created_at', '>', $timestamp)
-                ->orderBy('created_at', 'asc')
-                ->get()
-                ->map(function ($msg) use ($room) {
-                    $userName = 'System';
-                    
-                    if ($msg->role === 'assistant') {
-                        $userName = 'Мастер';
-                    } elseif ($msg->role === 'system') {
+            // Кэшируем сообщения на 5 секунд (для polling)
+            $messages = Cache::remember($cacheKey, 5, function () use ($room, $after) {
+                $timestamp = date('Y-m-d H:i:s', $after);
+                
+                return $room->gameMessages()
+                    ->with('user')
+                    ->where('created_at', '>', $timestamp)
+                    ->orderBy('created_at', 'asc')
+                    ->get()
+                    ->map(function ($msg) use ($room) {
                         $userName = 'System';
-                    } elseif ($msg->user) {
-                        // Получаем имя персонажа напрямую из таблицы room_user
-                        $pivotData = DB::table('room_user')
-                            ->where('room_id', $room->id)
-                            ->where('user_id', $msg->user_id)
-                            ->first();
                         
-                        if ($pivotData && !empty($pivotData->character_name)) {
-                            $userName = $pivotData->character_name;
-                        } else {
-                            $userName = $msg->user->name;
+                        if ($msg->role === 'assistant') {
+                            $userName = 'Мастер';
+                        } elseif ($msg->role === 'system') {
+                            $userName = 'System';
+                        } elseif ($msg->user) {
+                            $pivotData = DB::table('room_user')
+                                ->where('room_id', $room->id)
+                                ->where('user_id', $msg->user_id)
+                                ->first();
+                            
+                            if ($pivotData && !empty($pivotData->character_name)) {
+                                $userName = $pivotData->character_name;
+                            } else {
+                                $userName = $msg->user->name;
+                            }
                         }
-                    }
-                    
-                    return [
-                        'id' => $msg->id,
-                        'role' => $msg->role,
-                        'content' => $msg->content,
-                        'user_name' => $userName,
-                        'user_id' => $msg->user_id,
-                        'created_at' => $msg->created_at->timestamp,
-                    ];
-                });
+                        
+                        return [
+                            'id' => $msg->id,
+                            'role' => $msg->role,
+                            'content' => $msg->content,
+                            'user_name' => $userName,
+                            'user_id' => $msg->user_id,
+                            'created_at' => $msg->created_at->timestamp,
+                        ];
+                    });
+            });
 
             return response()->json($messages);
             
@@ -82,7 +87,6 @@ class GameMessageController extends Controller
             $message = $request->input('message');
             $user = Auth::user();
 
-            // Проверка наличия персонажа
             $character = $room->users()->where('user_id', $user->id)->first();
             if (!$character) {
                 return response()->json(['error' => 'Сначала создайте персонажа'], 400);
@@ -90,7 +94,6 @@ class GameMessageController extends Controller
 
             $characterData = $character->pivot;
 
-            // Сохраняем сообщение пользователя
             $userMessage = GameMessage::create([
                 'room_id' => $room->id,
                 'user_id' => $user->id,
@@ -98,21 +101,21 @@ class GameMessageController extends Controller
                 'content' => $message,
             ]);
 
-            // Обработка броска кубика
+            // Очищаем кэш сообщений при новом сообщении
+            Cache::tags(['room_' . $room->id . '_messages'])->flush();
+
             if (str_starts_with($message, '/roll')) {
                 preg_match('/\/roll\s*(\d+)?/', $message, $matches);
                 $difficulty = isset($matches[1]) ? (int)$matches[1] : null;
 
                 $roll = $this->dice->roll($difficulty);
 
-                // Сохраняем результат броска
                 GameMessage::create([
                     'room_id' => $room->id,
                     'role' => 'system',
                     'content' => $roll['message'],
                 ]);
 
-                // Отправляем в AI с результатом
                 $aiResponse = $this->gm->processMessage($room, $user, $message, $roll['message']);
 
                 return response()->json([
@@ -123,7 +126,6 @@ class GameMessageController extends Controller
                 ]);
             }
 
-            // Обычное сообщение
             $aiResponse = $this->gm->processMessage($room, $user, $message);
 
             return response()->json([

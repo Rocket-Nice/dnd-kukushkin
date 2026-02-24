@@ -118,4 +118,54 @@ class Room extends Model
             ];
         });
     }
+
+    /**
+     * Получить кэшированных пользователей комнаты (для использования как свойство)
+     */
+    public function getCachedUsersAttribute()
+    {
+        return Cache::remember('room_' . $this->id . '_users', 300, function () {
+            return $this->users()->get();
+        });
+    }
+
+    /**
+     * Получить кэшированные игровые сообщения (для использования как свойство)
+     */
+    public function getCachedGameMessagesAttribute()
+    {
+        return Cache::remember('room_' . $this->id . '_game_messages', 60, function () {
+            return $this->gameMessages()->latest()->limit(50)->get();
+        });
+    }
+
+    /**
+     * Получить кэшированные OOC сообщения (для использования как свойство)
+     */
+    public function getCachedOocMessagesAttribute()
+    {
+        return Cache::remember('room_' . $this->id . '_ooc_messages', 60, function () {
+            return $this->oocMessages()->latest()->limit(50)->get();
+        });
+    }
+
+    /**
+     * Получить количество пользователей (кэшированное)
+     */
+    public function getCachedUsersCountAttribute()
+    {
+        return Cache::remember('room_' . $this->id . '_users_count', 60, function () {
+            return $this->users()->count();
+        });
+    }
+
+    /**
+     * Получить количество готовых игроков (кэшированное)
+     */
+    public function getCachedReadyCountAttribute()
+    {
+        return Cache::remember('room_' . $this->id . '_ready_count', 60, function () {
+            return $this->users()->wherePivot('is_ready', true)->count();
+        });
+    }
 }

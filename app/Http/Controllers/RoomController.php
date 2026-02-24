@@ -9,6 +9,7 @@ use App\Services\GameMasterService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class RoomController extends Controller
 {
@@ -19,16 +20,18 @@ class RoomController extends Controller
 
     public function index()
     {
-        // Очищаем кэш пользователя перед загрузкой списка
-        cache()->forget("user_" . Auth::id() . "_rooms");
+        // Кэшируем список комнат пользователя на 1 час
+        $userRooms = Cache::remember('user_' . Auth::id() . '_rooms', 3600, function () {
+            return Auth::user()->rooms()->pluck('room_id')->toArray();
+        });
         
-        $rooms = Room::with('creator')
-            ->withCount('users')
-            ->latest()
-            ->paginate(10);
-        
-        // Добавляем информацию о том, в каких комнатах находится пользователь
-        $userRooms = Auth::user()->rooms()->pluck('room_id')->toArray();
+        // Кэшируем список комнат с пагинацией на 5 минут
+        $rooms = Cache::remember('rooms_list_page_' . request('page', 1), 300, function () {
+            return Room::with('creator')
+                ->withCount('users')
+                ->latest()
+                ->paginate(10);
+        });
         
         return view('rooms.index', compact('rooms', 'userRooms'));
     }
@@ -53,6 +56,10 @@ class RoomController extends Controller
 
         $room->users()->attach(Auth::id(), ['joined_at' => now()]);
 
+        // Очищаем кэш
+        Cache::forget('rooms_list_page_1');
+        Cache::forget('user_' . Auth::id() . '_rooms');
+
         return redirect()->route('rooms.show', ['room' => $room->id])
             ->with('success', 'Комната создана!');
     }
@@ -64,10 +71,13 @@ class RoomController extends Controller
                 ->with('error', 'Вы не присоединились к этой комнате');
         }
 
-        $character = $room->users()
-            ->where('user_id', Auth::id())
-            ->first()
-            ?->pivot;
+        // Кэшируем данные персонажа на 5 минут
+        $character = Cache::remember('room_' . $room->id . '_user_' . Auth::id() . '_character', 300, function () use ($room) {
+            return $room->users()
+                ->where('user_id', Auth::id())
+                ->first()
+                ?->pivot;
+        });
 
         // Если персонаж не создан - показываем модалку
         if (!$character || !$character->character_name) {
@@ -89,16 +99,15 @@ class RoomController extends Controller
 
         $room->users()->syncWithoutDetaching([Auth::id() => ['joined_at' => now()]]);
 
+        // Очищаем кэш
+        Cache::forget('user_' . Auth::id() . '_rooms');
+        Cache::forget('room_' . $room->id . '_users');
+        Cache::tags(['room_' . $room->id])->flush();
+
         return redirect()->route('rooms.show', $room)
             ->with('success', 'Вы присоединились к комнате');
     }
 
-    /**
-     * Выход из комнаты
-     */
-    /**
- * Выход из комнаты
- */
     public function leave(Room $room)
     {
         // Нельзя выйти, если игра уже началась
@@ -130,18 +139,16 @@ class RoomController extends Controller
         });
 
         // Очищаем кэш
-        cache()->forget("room_{$room->id}_users");
-        cache()->forget("room_{$room->id}_data");
-        cache()->forget("user_" . Auth::id() . "_rooms");
+        Cache::forget("room_{$room->id}_users");
+        Cache::forget("room_{$room->id}_data");
+        Cache::forget("user_" . Auth::id() . "_rooms");
+        Cache::forget('room_' . $room->id . '_user_' . Auth::id() . '_character');
+        Cache::tags(['room_' . $room->id])->flush();
 
-        // Перенаправляем на список комнат с сообщением
         return redirect()->route('rooms.index')
             ->with('success', 'Вы успешно вышли из комнаты');
     }
 
-    /**
-     * Страница подтверждения удаления комнаты
-     */
     public function confirmDestroy(Room $room)
     {
         // Только создатель может удалять комнату
@@ -153,9 +160,6 @@ class RoomController extends Controller
         return view('rooms.confirm-destroy', compact('room'));
     }
 
-    /**
-     * Удаление комнаты
-     */
     public function destroy(Room $room)
     {
         // Только создатель может удалять комнату
@@ -179,21 +183,20 @@ class RoomController extends Controller
 
         // Очищаем кэш
         $this->clearRoomCache($room->id);
+        Cache::forget('rooms_list_page_1');
+        Cache::tags(['room_' . $room->id])->flush();
 
         return redirect()->route('rooms.index')
             ->with('success', 'Комната успешно удалена');
     }
 
-    /**
-     * Очистка кэша комнаты
-     */
     private function clearRoomCache($roomId)
     {
         try {
             // Очищаем возможные кэшированные данные
-            cache()->forget("room_{$roomId}_users");
-            cache()->forget("room_{$roomId}_messages");
-            cache()->forget("room_{$roomId}_game_state");
+            Cache::forget("room_{$roomId}_users");
+            Cache::forget("room_{$roomId}_messages");
+            Cache::forget("room_{$roomId}_game_state");
             
             // Если используется view cache
             \Artisan::call('view:clear');
@@ -209,9 +212,6 @@ class RoomController extends Controller
         }
     }
 
-    /**
-     * Принудительный выход всех игроков (для админа или при баге)
-     */
     public function kickAll(Room $room)
     {
         if ($room->created_by !== Auth::id()) {
@@ -228,6 +228,9 @@ class RoomController extends Controller
             // Удаляем все игровые сообщения
             GameMessage::where('room_id', $room->id)->delete();
         });
+
+        // Очищаем кэш
+        Cache::tags(['room_' . $room->id])->flush();
 
         return redirect()->route('rooms.show', $room)
             ->with('success', 'Все игроки были удалены из комнаты');
@@ -270,7 +273,9 @@ class RoomController extends Controller
         ]);
 
         // Очищаем кэш пользователей комнаты
-        cache()->forget("room_{$room->id}_users");
+        Cache::forget("room_{$room->id}_users");
+        Cache::forget('room_' . $room->id . '_user_' . Auth::id() . '_character');
+        Cache::tags(['room_' . $room->id])->flush();
 
         return redirect()->route('rooms.show', $room)
             ->with('success', 'Персонаж создан!');
@@ -292,32 +297,35 @@ class RoomController extends Controller
         $gm->generateIntro($room);
 
         // Очищаем кэш
-        cache()->forget("room_{$room->id}_game_state");
+        Cache::forget("room_{$room->id}_game_state");
+        Cache::tags(['room_' . $room->id])->flush();
 
         return redirect()->route('rooms.show', $room)
             ->with('success', 'Игра началась!');
     }
 
-/**
- * Получить статус комнаты
- */
     public function status(Room $room)
     {
-        return response()->json([
-            'status' => $room->status,
-            'users' => $room->users()->get()->map(function($user) {
-                return [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'character_name' => $user->pivot->character_name,
-                    'is_ready' => $user->pivot->is_ready,
-                    'current_hp' => $user->pivot->current_hp,
-                    'max_hp' => $user->pivot->max_hp,
-                    'armor_class' => $user->pivot->armor_class,
-                ];
-            }),
-            'users_count' => $room->users()->count(),
-            'ready_count' => $room->users()->wherePivot('is_ready', true)->count(),
-        ]);
+        // Кэшируем данные статуса на 10 секунд
+        $data = Cache::remember('room_' . $room->id . '_status_data', 10, function () use ($room) {
+            return [
+                'status' => $room->status,
+                'users' => $room->users()->get()->map(function($user) {
+                    return [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'character_name' => $user->pivot->character_name,
+                        'is_ready' => $user->pivot->is_ready,
+                        'current_hp' => $user->pivot->current_hp,
+                        'max_hp' => $user->pivot->max_hp,
+                        'armor_class' => $user->pivot->armor_class,
+                    ];
+                }),
+                'users_count' => $room->users()->count(),
+                'ready_count' => $room->users()->wherePivot('is_ready', true)->count(),
+            ];
+        });
+
+        return response()->json($data);
     }
 }

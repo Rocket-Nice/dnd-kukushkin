@@ -6,6 +6,7 @@ use App\Models\Room;
 use App\Models\OocMessage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 class OocMessageController extends Controller
 {
@@ -17,20 +18,24 @@ class OocMessageController extends Controller
     public function index(Request $request, Room $room)
     {
         $after = $request->get('after', 0);
+        $cacheKey = 'room_' . $room->id . '_ooc_messages_after_' . $after;
         
-        $messages = $room->oocMessages()
-            ->with('user')
-            ->where('created_at', '>', date('Y-m-d H:i:s', $after))
-            ->get()
-            ->map(function ($msg) {
-                return [
-                    'id' => $msg->id,
-                    'content' => $msg->content,
-                    'user_name' => $msg->user->name,
-                    'user_id' => $msg->user_id,
-                    'created_at' => $msg->created_at->timestamp,
-                ];
-            });
+        // Кэшируем OOC сообщения на 5 секунд
+        $messages = Cache::remember($cacheKey, 5, function () use ($room, $after) {
+            return $room->oocMessages()
+                ->with('user')
+                ->where('created_at', '>', date('Y-m-d H:i:s', $after))
+                ->get()
+                ->map(function ($msg) {
+                    return [
+                        'id' => $msg->id,
+                        'content' => $msg->content,
+                        'user_name' => $msg->user->name,
+                        'user_id' => $msg->user_id,
+                        'created_at' => $msg->created_at->timestamp,
+                    ];
+                });
+        });
 
         return response()->json($messages);
     }
@@ -46,6 +51,9 @@ class OocMessageController extends Controller
         ]);
 
         $message->load('user');
+
+        // Очищаем кэш OOC сообщений
+        Cache::tags(['room_' . $room->id . '_ooc_messages'])->flush();
 
         return response()->json([
             'success' => true,
