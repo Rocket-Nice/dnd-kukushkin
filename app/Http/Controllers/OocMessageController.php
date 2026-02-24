@@ -7,6 +7,7 @@ use App\Models\OocMessage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use App\Events\OocMessageSent;
 
 class OocMessageController extends Controller
 {
@@ -52,7 +53,9 @@ class OocMessageController extends Controller
 
         $message->load('user');
 
-        // Очищаем кэш OOC сообщений
+        // ОТПРАВЛЯЕМ СОБЫТИЕ!
+        broadcast(new OocMessageSent($message, $room))->toOthers();
+
         Cache::tags(['room_' . $room->id . '_ooc_messages'])->flush();
 
         return response()->json([
