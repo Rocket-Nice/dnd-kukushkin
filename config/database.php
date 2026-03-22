@@ -130,7 +130,8 @@ return [
 
         'options' => [
             'cluster' => env('REDIS_CLUSTER', 'redis'),
-            'prefix' => env('REDIS_PREFIX', Str::slug(env('APP_NAME', 'laravel'), '_').'_database_'),
+            // Убираем глобальный префикс, так как будем использовать префиксы в каждом подключении отдельно
+            // 'prefix' => env('REDIS_PREFIX', Str::slug(env('APP_NAME', 'laravel'), '_').'_database_'),
         ],
 
         'default' => [
@@ -140,6 +141,7 @@ return [
             'password' => env('REDIS_PASSWORD'),
             'port' => env('REDIS_PORT', '6379'),
             'database' => env('REDIS_DB', '0'),
+            'prefix' => 'laravel_default_', // Добавляем префикс для общих данных
         ],
 
         'cache' => [
@@ -149,6 +151,29 @@ return [
             'password' => env('REDIS_PASSWORD'),
             'port' => env('REDIS_PORT', '6379'),
             'database' => env('REDIS_CACHE_DB', '1'),
+            'prefix' => 'cache_', // Добавляем префикс для кэша
+        ],
+
+        // Добавляем подключение для сессий
+        'session' => [
+            'url' => env('REDIS_URL'),
+            'host' => env('REDIS_HOST', '127.0.0.1'),
+            'username' => env('REDIS_USERNAME'),
+            'password' => env('REDIS_PASSWORD'),
+            'port' => env('REDIS_PORT', '6379'),
+            'database' => 2, // Для сессий используем БД 2
+            'prefix' => 'sess_', // Префикс для сессий
+        ],
+        
+        // Добавляем подключение для очередей
+        'queue' => [
+            'url' => env('REDIS_URL'),
+            'host' => env('REDIS_HOST', '127.0.0.1'),
+            'username' => env('REDIS_USERNAME'),
+            'password' => env('REDIS_PASSWORD'),
+            'port' => env('REDIS_PORT', '6379'),
+            'database' => 3, // Для очередей используем БД 3
+            'prefix' => 'queue_', // Префикс для очередей
         ],
 
     ],

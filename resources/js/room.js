@@ -158,7 +158,7 @@ class DnDRoom {
             if (rollBtn) rollBtn.disabled = true;
             
             try {
-                const response = await fetch(`/public/rooms/${this.roomId}/game-messages`, {
+                const response = await fetch(`/rooms/${this.roomId}/game-messages`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -204,7 +204,7 @@ class DnDRoom {
             input.disabled = true;
             
             try {
-                const response = await fetch(`/public/rooms/${this.roomId}/ooc-messages`, {
+                const response = await fetch(`/rooms/${this.roomId}/ooc-messages`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
