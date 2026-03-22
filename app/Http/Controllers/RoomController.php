@@ -6,6 +6,7 @@ use App\Models\Room;
 use App\Models\GameMessage;
 use App\Models\OocMessage;
 use App\Services\GameMasterService;
+use App\Events\RoomStatusUpdated;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -278,7 +279,8 @@ class RoomController extends Controller
         Cache::tags(['room_' . $room->id])->flush();
 
         return redirect()->route('rooms.show', $room)
-            ->with('success', 'Персонаж создан!');
+            ->with('success', 'Персонаж создан!')
+            ->with('character_created', true);
     }
 
     public function start(Room $room, GameMasterService $gm)
@@ -293,6 +295,7 @@ class RoomController extends Controller
         }
 
         $room->update(['status' => 'playing']);
+        broadcast(new RoomStatusUpdated($room));
         
         $gm->generateIntro($room);
 

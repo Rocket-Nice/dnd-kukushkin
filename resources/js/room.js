@@ -193,18 +193,21 @@ class DnDRoom {
         const form = document.getElementById('ooc-message-form');
         if (!form) return;
         
+        const input = document.getElementById('ooc-message-input');
+        const submitBtn = form.querySelector('button[type="submit"]');
+        
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const input = document.getElementById('ooc-message-input');
             const message = input.value.trim();
-            
             if (!message) return;
             
+            // Disable
             input.disabled = true;
+            submitBtn.disabled = true;
             
             try {
-                const response = await fetch(`/rooms/${this.roomId}/ooc-messages`, {
+                const response = await fetch(`/public/rooms/${this.roomId}/ooc-messages`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -223,7 +226,9 @@ class DnDRoom {
                 console.error('Error:', error);
                 this.showError('Ошибка соединения');
             } finally {
+                // Enable
                 input.disabled = false;
+                submitBtn.disabled = false;
                 input.focus();
             }
         });
@@ -251,7 +256,10 @@ class DnDRoom {
             
             const input = document.getElementById('game-message-input');
             input.value = message;
-            document.getElementById('game-message-form').dispatchEvent(new Event('submit'));
+            
+            setTimeout(() => {
+                document.getElementById('game-message-form').dispatchEvent(new Event('submit'));
+            }, 50);
         });
     }
     
