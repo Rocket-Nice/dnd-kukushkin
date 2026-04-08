@@ -1,0 +1,65 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dnd_game_app
+    ports:
+      - "8080:80"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_DATABASE=dnd_game
+      - DB_USERNAME=root
+      - DB_PASSWORD=root
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - db
+      - redis
+    networks:
+      - dnd_network
+
+  db:
+    image: mysql:8.0
+    container_name: dnd_game_db
+    restart: always
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_DATABASE: dnd_game
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_PASSWORD: root
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - dnd_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: dnd_game_redis
+    restart: always
+    networks:
+      - dnd_network
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: dnd_game_pma
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+    depends_on:
+      - db
+    networks:
+      - dnd_network
+
+volumes:
+  db_data:
+
+networks:
+  dnd_network:
+    driver: bridge
