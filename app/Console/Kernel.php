@@ -4,6 +4,8 @@ namespace App\Console;
 
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
+use App\Console\Commands\CleanOldRooms;
+use Illuminate\Support\Facades\Log;
 
 class Kernel extends ConsoleKernel
 {
@@ -13,7 +15,7 @@ class Kernel extends ConsoleKernel
      * @var array
      */
     protected $commands = [
-        \App\Console\Commands\CleanOldRooms::class,
+        CleanOldRooms::class,
     ];
 
     /**
@@ -28,10 +30,10 @@ class Kernel extends ConsoleKernel
                  ->withoutOverlapping()
                  ->runInBackground()
                  ->onSuccess(function () {
-                     \Log::info('Старые комнаты успешно очищены');
+                     Log::info('Старые комнаты успешно очищены');
                  })
                  ->onFailure(function () {
-                     \Log::error('Ошибка при очистке старых комнат');
+                     Log::error('Ошибка при очистке старых комнат');
                  });
 
         // Дополнительная очистка каждую неделю для более старых комнат (60 дней)
