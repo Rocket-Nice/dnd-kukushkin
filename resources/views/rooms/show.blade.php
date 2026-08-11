@@ -60,10 +60,9 @@
     <!-- Основной контент -->
     <div class="max-w-7xl mx-auto p-4 sm:p-6">
         <div class="flex flex-col lg:grid lg:grid-cols-4 gap-4 sm:gap-6">
-            <!-- Левая колонка: Игровой чат (на мобиле сверху, на планшете/десктопе слева) -->
+            <!-- Левая колонка: Игровой чат -->
             <div class="lg:col-span-3 order-1">
                 <div class="bg-gray-800 rounded-lg shadow-xl border border-gray-700 h-[50vh] sm:h-[60vh] lg:h-[calc(100vh-200px)] flex flex-col">
-                    <!-- Заголовок игрового чата -->
                     <div class="bg-gray-700 px-3 sm:px-4 py-2 sm:py-3 rounded-t-lg border-b border-gray-600">
                         <h2 class="text-base sm:text-lg font-semibold flex items-center">
                             <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -73,18 +72,29 @@
                         </h2>
                     </div>
                     
-                    <!-- Сообщения игрового чата -->
                     <div id="game-chat" class="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
                         @forelse($room->gameMessages as $msg)
+                            @php
+                                // Раньше здесь использовался $msg->user->pivot, а у GameMessage::user()
+                                // обычный belongsTo — pivot там всегда null, поэтому имя всегда падало
+                                // в "System" после перезагрузки страницы. Теперь берём имя персонажа
+                                // через Room::characterNameForUser().
+                                $displayName = match(true) {
+                                    $msg->role === 'assistant' => '🎲 Мастер',
+                                    $msg->role === 'system' => 'System',
+                                    (bool) $msg->user_id => $room->characterNameForUser($msg->user_id) ?? 'System',
+                                    default => 'System',
+                                };
+                            @endphp
                             <div class="flex {{ $msg->role === 'assistant' ? 'justify-start' : 'justify-end' }}" data-message-id="{{ $msg->id }}" data-timestamp="{{ $msg->created_at->timestamp }}">
                                 <div class="max-w-[90%] sm:max-w-[80%] {{ $msg->role === 'assistant' 
-                                    ? ($msg->role === 'system' ? 'bg-yellow-600 bg-opacity-20 text-yellow-200 border border-yellow-700' : 'bg-gray-700 text-gray-100')
-                                    : 'bg-purple-600 text-white' }} rounded-lg px-3 sm:px-4 py-2 shadow">
-                                    <div class="text-xs {{ $msg->role === 'assistant' ? 'text-gray-400' : 'text-purple-200' }} mb-1">
-                                        {{ $msg->role === 'assistant' ? '🎲 Мастер' : ($msg->user?->pivot?->character_name ?? 'System') }}
+                                    ? 'bg-gray-700 text-gray-100'
+                                    : ($msg->role === 'system' ? 'bg-yellow-600 bg-opacity-20 text-yellow-200 border border-yellow-700' : 'bg-purple-600 text-white') }} rounded-lg px-3 sm:px-4 py-2 shadow">
+                                    <div class="text-xs {{ $msg->role === 'assistant' ? 'text-gray-400' : ($msg->role === 'system' ? 'text-yellow-300' : 'text-purple-200') }} mb-1">
+                                        {{ $displayName }}
                                     </div>
                                     <div class="text-xs sm:text-sm break-words">{{ $msg->content }}</div>
-                                    <div class="text-xs {{ $msg->role === 'assistant' ? 'text-gray-500' : 'text-purple-300' }} text-right mt-1">
+                                    <div class="text-xs {{ $msg->role === 'assistant' ? 'text-gray-500' : ($msg->role === 'system' ? 'text-yellow-400' : 'text-purple-300') }} text-right mt-1">
                                         {{ $msg->created_at->format('H:i') }}
                                     </div>
                                 </div>
@@ -96,7 +106,6 @@
                         @endforelse
                     </div>
                     
-                    <!-- Форма ввода игрового чата -->
                     <div class="bg-gray-700 px-3 sm:px-4 py-2 sm:py-3 rounded-b-lg border-t border-gray-600">
                         <form id="game-message-form" class="flex flex-col sm:flex-row gap-2">
                             @csrf
@@ -130,7 +139,7 @@
                 </div>
             </div>
 
-            <!-- Правая колонка: OOC чат и игроки (на мобиле снизу, на планшете/десктопе справа) -->
+            <!-- Правая колонка: OOC чат и игроки -->
             <div class="lg:col-span-1 order-2 space-y-4 sm:space-y-6">
                 <!-- Блок игроков -->
                 <div class="bg-gray-800 rounded-lg shadow-xl border border-gray-700">
@@ -235,7 +244,7 @@
                     </div>
                 </div>
 
-                <!-- Информация о комнате (скрываем на мобиле, показываем на планшете+) -->
+                <!-- Информация о комнате -->
                 <div class="hidden sm:block bg-gray-800 rounded-lg shadow-xl border border-gray-700 p-3 sm:p-4">
                     <h3 class="text-xs sm:text-sm font-semibold text-gray-400 mb-2">О комнате</h3>
                     <div class="space-y-1 sm:space-y-2 text-xs">
@@ -252,7 +261,7 @@
     </div>
 </div>
 
-<!-- МОДАЛЬНОЕ ОКНО СОЗДАНИЯ ПЕРСОНАЖА (адаптивное) -->
+<!-- МОДАЛЬНОЕ ОКНО СОЗДАНИЯ ПЕРСОНАЖА -->
 @php
     $showModal = false;
     if ($room->status === 'waiting') {
@@ -277,7 +286,6 @@
         <form action="{{ route('rooms.character.save', $room) }}" method="POST" class="p-4 sm:p-6 space-y-4 sm:space-y-6">
             @csrf
             
-            <!-- Основная информация -->
             <div class="space-y-3 sm:space-y-4">
                 <div>
                     <label class="block text-xs sm:text-sm font-medium text-gray-300 mb-1 sm:mb-2">Имя персонажа *</label>
@@ -311,7 +319,6 @@
                 </div>
             </div>
             
-            <!-- Характеристики -->
             <div>
                 <h3 class="text-sm sm:text-md font-semibold text-white mb-2 sm:mb-3">Характеристики (3-20)</h3>
                 <p class="text-xs text-gray-400 mb-2 sm:mb-3">Распределите очки характеристик. Каждая характеристика влияет на навыки персонажа.</p>
@@ -355,7 +362,6 @@
                 </div>
             </div>
             
-            <!-- Кнопки -->
             <div class="flex justify-end space-x-3 pt-3 sm:pt-4 border-t border-gray-700">
                 <button type="submit" 
                     class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 sm:px-6 rounded-lg text-sm sm:text-base transition w-full sm:w-auto">

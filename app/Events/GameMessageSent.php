@@ -4,13 +4,12 @@ namespace App\Events;
 
 use App\Models\GameMessage;
 use App\Models\Room;
-use Illuminate\Broadcasting\Channel;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Broadcasting\InteractsWithSockets;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
-use Illuminate\Support\Facades\DB;
 
-class GameMessageSent implements ShouldBroadcast
+class GameMessageSent implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets;
 
@@ -25,24 +24,19 @@ class GameMessageSent implements ShouldBroadcast
 
     public function broadcastOn()
     {
-        return new Channel('room.' . $this->room->id);
+        return new PrivateChannel('room.' . $this->room->id);
     }
 
     public function broadcastWith()
     {
         $userName = 'System';
-        
+
         if ($this->message->role === 'assistant') {
             $userName = 'Мастер';
-        } elseif ($this->message->user) {
-            $pivotData = \DB::table('room_user')
-                ->where('room_id', $this->room->id)
-                ->where('user_id', $this->message->user_id)
-                ->first();
-            
-            $userName = $pivotData && !empty($pivotData->character_name) 
-                ? $pivotData->character_name 
-                : $this->message->user->name;
+        } elseif ($this->message->role === 'user' && $this->message->user_id) {
+            $userName = $this->room->characterNameForUser($this->message->user_id)
+                ?? $this->message->user?->name
+                ?? 'Игрок';
         }
 
         return [

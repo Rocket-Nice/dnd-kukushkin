@@ -6,7 +6,6 @@ use App\Models\Room;
 use App\Models\User;
 use App\Models\GameMessage;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
 
 class GameMasterService
 {
@@ -45,24 +44,21 @@ class GameMasterService
         Log::info('GameMasterService::processMessage', [
             'room_id' => $room->id,
             'user_id' => $user->id,
-            'user_name' => $user->name,
             'message' => $userMessage
         ]);
 
-        // ПОЛУЧАЕМ ПЕРСОНАЖА
         $userRoomData = $room->users()->where('user_id', $user->id)->first();
-        
+
         if (!$userRoomData) {
             throw new \Exception('Пользователь не в комнате');
         }
-        
+
         $character = $userRoomData->pivot;
-        
+
         if (!$character || !$character->character_name) {
             throw new \Exception('У пользователя нет персонажа');
         }
 
-        // Получаем ВСЕХ персонажей в комнате с их игроками
         $allCharacters = $room->users()
             ->wherePivot('is_ready', true)
             ->get()
@@ -77,10 +73,11 @@ class GameMasterService
                 ];
             });
 
-        // Строим системный промпт с информацией о том, кто есть кто
         $system = $this->buildSystemPrompt($room, $character, $allCharacters, $user);
 
-        // Получаем историю сообщений
+        // История сообщений — имя персонажа теперь берётся один раз через
+        // Room::characterNameForUser() (кэшируется внутри Room на время запроса),
+        // а не отдельным запросом на каждое сообщение.
         $history = GameMessage::where('room_id', $room->id)
             ->latest()
             ->limit(20)
@@ -88,23 +85,16 @@ class GameMasterService
             ->reverse()
             ->map(function ($msg) use ($room) {
                 $role = $msg->role === 'assistant' ? 'assistant' : 'user';
-                
+
                 if ($msg->role === 'user' && $msg->user_id) {
-                    // Получаем имя персонажа для этого сообщения
-                    $pivotData = DB::table('room_user')
-                        ->where('room_id', $room->id)
-                        ->where('user_id', $msg->user_id)
-                        ->first();
-                    
-                    $characterName = $pivotData && $pivotData->character_name 
-                        ? $pivotData->character_name 
-                        : 'Игрок ' . $msg->user_id;
-                    
+                    $characterName = $room->characterNameForUser($msg->user_id)
+                        ?? 'Игрок ' . $msg->user_id;
+
                     $content = $characterName . ': ' . $msg->content;
                 } else {
                     $content = $msg->content;
                 }
-                
+
                 return ['role' => $role, 'content' => $content];
             })
             ->values()
@@ -119,7 +109,6 @@ class GameMasterService
             $messages[] = ['role' => 'system', 'content' => $rollResult];
         }
 
-        // Добавляем текущее сообщение с правильной маркировкой
         if ($userMessage && !str_starts_with($userMessage, '/roll')) {
             $messages[] = ['role' => 'user', 'content' => "{$character->character_name}: $userMessage"];
         }
@@ -135,12 +124,10 @@ class GameMasterService
 
     protected function buildSystemPrompt(Room $room, $currentCharacter, $allCharacters, $currentUser): string
     {
-        // Строим список персонажей с указанием игроков
         $playersList = collect($allCharacters)->map(function ($c) {
             return "- Персонаж: {$c['character_name']} ({$c['character_class']})";
         })->join("\n");
 
-        // Информация о текущем игроке
         $currentPlayerInfo = "Сейчас действует игрок, управляющий персонажем **{$currentCharacter->character_name}**.";
 
         $basePrompt = $room->master_prompt ?? "Ты мастер игры D&D. Твоя задача - вести сюжет, описывать мир и NPC. НИКОГДА не отвечай за персонажей игроков - только игроки управляют своими персонажами. Ты управляешь NPC. Кидай кубики за действия NPC.";

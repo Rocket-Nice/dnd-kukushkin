@@ -6,7 +6,6 @@ use App\Models\Room;
 use App\Models\OocMessage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
 use App\Events\OocMessageSent;
 
 class OocMessageController extends Controller
@@ -18,55 +17,54 @@ class OocMessageController extends Controller
 
     public function index(Request $request, Room $room)
     {
-        $after = $request->get('after', 0);
-        $cacheKey = 'room_' . $room->id . '_ooc_messages_after_' . $after;
-        
-        // Кэшируем OOC сообщения на 5 секунд
-        $messages = Cache::remember($cacheKey, 5, function () use ($room, $after) {
-            return $room->oocMessages()
-                ->with('user')
-                ->where('created_at', '>', date('Y-m-d H:i:s', $after))
-                ->get()
-                ->map(function ($msg) {
-                    return [
-                        'id' => $msg->id,
-                        'content' => $msg->content,
-                        'user_name' => $msg->user->name,
-                        'user_id' => $msg->user_id,
-                        'created_at' => $msg->created_at->timestamp,
-                    ];
-                });
-        });
+        if (!$room->isUserInRoom(Auth::id())) {
+            return response()->json(['error' => 'Вы не в этой комнате'], 403);
+        }
+
+        $after = (int) $request->get('after', 0);
+
+        $messages = $room->oocMessages()
+            ->with('user')
+            ->where('created_at', '>', date('Y-m-d H:i:s', $after))
+            ->orderBy('created_at', 'asc')
+            ->get()
+            ->map(fn ($msg) => $this->formatMessage($msg));
 
         return response()->json($messages);
     }
 
     public function store(Request $request, Room $room)
     {
-        $request->validate(['message' => 'required|string']);
+        $request->validate(['message' => 'required|string|max:1000']);
+
+        if (!$room->isUserInRoom(Auth::id())) {
+            return response()->json(['error' => 'Вы не в этой комнате'], 403);
+        }
 
         $message = OocMessage::create([
             'room_id' => $room->id,
             'user_id' => Auth::id(),
-            'content' => $request->message,
+            'content' => trim($request->message),
         ]);
 
         $message->load('user');
 
-        // ОТПРАВЛЯЕМ СОБЫТИЕ!
         broadcast(new OocMessageSent($message, $room))->toOthers();
-
-        Cache::tags(['room_' . $room->id . '_ooc_messages'])->flush();
 
         return response()->json([
             'success' => true,
-            'message' => [
-                'id' => $message->id,
-                'content' => $message->content,
-                'user_name' => $message->user->name,
-                'user_id' => $message->user_id,
-                'created_at' => $message->created_at->timestamp,
-            ]
+            'message' => $this->formatMessage($message),
         ]);
+    }
+
+    private function formatMessage(OocMessage $msg): array
+    {
+        return [
+            'id' => $msg->id,
+            'content' => $msg->content,
+            'user_name' => $msg->user->name,
+            'user_id' => $msg->user_id,
+            'created_at' => $msg->created_at->timestamp,
+        ];
     }
 }

@@ -13,7 +13,7 @@ class DeepSeekService
     public function __construct()
     {
         $this->apiKey = config('services.deepseek.api_key');
-        
+
         if (empty($this->apiKey)) {
             Log::error('DeepSeek API key is not configured');
         }
@@ -30,13 +30,16 @@ class DeepSeekService
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $this->apiKey,
                 'Content-Type' => 'application/json',
-            ])->post($this->apiUrl, [
-                'model' => 'deepseek-chat',
-                'messages' => $messages,
-                'temperature' => $temperature,
-                'max_tokens' => $maxTokens,
-                'stream' => false,
-            ]);
+            ])
+                ->connectTimeout(5)
+                ->timeout(20)
+                ->post($this->apiUrl, [
+                    'model' => 'deepseek-chat',
+                    'messages' => $messages,
+                    'temperature' => $temperature,
+                    'max_tokens' => $maxTokens,
+                    'stream' => false,
+                ]);
 
             if ($response->failed()) {
                 Log::error('DeepSeek API error', [
@@ -47,13 +50,16 @@ class DeepSeekService
             }
 
             $result = $response->json('choices.0.message.content');
-            
+
             Log::info('DeepSeek API response received', [
-                'response_length' => strlen($result)
+                'response_length' => strlen($result ?? '')
             ]);
 
             return $result;
 
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            Log::error('DeepSeek API connection timeout', ['message' => $e->getMessage()]);
+            throw new \Exception('Мастер временно недоступен (таймаут соединения)');
         } catch (\Exception $e) {
             Log::error('DeepSeek API exception', [
                 'message' => $e->getMessage(),

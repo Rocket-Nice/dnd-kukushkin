@@ -29,7 +29,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/profile', [AuthController::class, 'profile']);
 
-    Route::apiResource('rooms', RoomController::class);
-    Route::post('/rooms/{room}/join', [RoomController::class, 'join']);
-    Route::post('/rooms/{room}/start', [RoomController::class, 'start']);
+    // Route::apiResource('rooms', RoomController::class);
+    // Route::post('/rooms/{room}/join', [RoomController::class, 'join']);
+    // Route::post('/rooms/{room}/start', [RoomController::class, 'start']);
 });

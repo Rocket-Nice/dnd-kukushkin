@@ -4,12 +4,12 @@ namespace App\Events;
 
 use App\Models\OocMessage;
 use App\Models\Room;
-use Illuminate\Broadcasting\Channel;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Broadcasting\InteractsWithSockets;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 
-class OocMessageSent implements ShouldBroadcast
+class OocMessageSent implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets;
 
@@ -24,7 +24,7 @@ class OocMessageSent implements ShouldBroadcast
 
     public function broadcastOn()
     {
-        return new Channel('room.' . $this->room->id);
+        return new PrivateChannel('room.' . $this->room->id);
     }
 
     public function broadcastWith()
