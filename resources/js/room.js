@@ -1,22 +1,16 @@
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
 
-window.Pusher = Pusher;
-
-const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
-
-window.Echo = new Echo({
-    broadcaster: 'pusher',
-    key: '897991349fbd3d982ac0',
-    cluster: 'eu',
-    forceTLS: true,
-    authEndpoint: '/broadcasting/auth',
-    auth: {
-        headers: {
-            'X-CSRF-TOKEN': csrfToken,
-        },
-    },
-});
+const CLASS_NAME_MAP = {
+    'fighter': 'Воин',
+    'wizard': 'Волшебник',
+    'rogue': 'Плут',
+    'cleric': 'Жрец',
+    'ranger': 'Следопыт',
+    'paladin': 'Паладин',
+    'bard': 'Бард',
+    'barbarian': 'Варвар'
+};
 
 class DnDRoom {
     constructor(roomId, userId) {
@@ -24,10 +18,28 @@ class DnDRoom {
 
         this.roomId = roomId;
         this.userId = userId;
-        this.csrfToken = csrfToken;
+        this.csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
 
         this.sendingGameMessage = false;
         this.sendingOocMessage = false;
+
+        // Echo/Pusher создаются только здесь — то есть только когда мы точно
+        // находимся на странице комнаты. Раньше это происходило на уровне
+        // модуля (при импорте room.js), а значит на КАЖДОЙ странице сайта,
+        // включая логин/профиль/список комнат, где WS вообще не нужен.
+        window.Pusher = Pusher;
+        window.Echo = new Echo({
+            broadcaster: 'pusher',
+            key: '7ad02cc7a1ec4d3967c9',
+            cluster: 'eu',
+            forceTLS: true,
+            authEndpoint: '/broadcasting/auth',
+            auth: {
+                headers: {
+                    'X-CSRF-TOKEN': this.csrfToken,
+                },
+            },
+        });
 
         this.init();
         this.initWebSockets();
@@ -53,11 +65,25 @@ class DnDRoom {
                 this.updateRoomStatus(e);
                 this.updatePlayersList(e.users);
             })
+            .listen('CharacterStatsUpdated', (e) => {
+                (e.changes || []).forEach((change) => this.applyStatChange(change));
+            })
             .error((error) => {
                 console.error('Echo channel auth/error:', error);
             });
 
         console.log('WebSockets initialized for room:', this.roomId);
+    }
+
+    /**
+     * Отписывается от приватного канала и закрывает соединение — вызывается
+     * при уходе со страницы комнаты (см. обработчик в конце файла), чтобы не
+     * держать открытый WS-сокет, гуляя по остальному сайту через Alpine/SPA-подобную
+     * навигацию (если она появится) или просто на всякий случай при unload.
+     */
+    disconnect() {
+        window.Echo?.leave(`room.${this.roomId}`);
+        window.Echo?.disconnect();
     }
 
     updateRoomStatus(data) {
@@ -81,6 +107,59 @@ class DnDRoom {
         }
     }
 
+    hpBarColor(pct) {
+        if (pct <= 25) return 'bg-red-500';
+        if (pct <= 60) return 'bg-yellow-500';
+        return 'bg-green-500';
+    }
+
+    renderPlayerRow(user) {
+        const readyClass = user.is_ready ? 'bg-green-900 bg-opacity-20' : 'bg-gray-700';
+        const readyIcon = user.is_ready ? '<span class="ml-1 text-xs text-green-400">✅</span>' : '';
+
+        let className = '';
+        if (user.character_class) {
+            className = CLASS_NAME_MAP[user.character_class] || user.character_class;
+        }
+
+        let statsBlock = '';
+        if (user.character_name) {
+            const maxHp = user.max_hp || 1;
+            const currentHp = Math.max(0, Math.min(maxHp, user.current_hp ?? maxHp));
+            const pct = Math.round((currentHp / maxHp) * 100);
+
+            statsBlock = `
+                <div class="text-xs text-gray-400 truncate hp-text">
+                    ${className ? '<span class="text-purple-400">' + this.escapeHtml(className) + '</span> | ' : ''}
+                    HP: ${currentHp}/${maxHp} | AC: ${user.armor_class ?? '—'}
+                </div>
+                <div class="w-full bg-gray-900 rounded-full h-1.5 mt-1 overflow-hidden">
+                    <div class="hp-bar h-1.5 rounded-full transition-all duration-500 ${this.hpBarColor(pct)}" style="width:${pct}%"></div>
+                </div>
+            `;
+        }
+
+        const div = document.createElement('div');
+        div.className = `flex items-center justify-between p-2 ${readyClass} rounded-lg`;
+        div.dataset.userId = user.id;
+
+        div.innerHTML = `
+            <div class="flex items-center space-x-2 min-w-0 flex-1">
+                <div class="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center text-xs sm:text-sm font-bold flex-shrink-0">
+                    ${this.escapeHtml((user.character_name || user.name).charAt(0))}
+                </div>
+                <div class="min-w-0 flex-1">
+                    <div class="font-medium text-xs sm:text-sm truncate">
+                        ${this.escapeHtml(user.character_name || user.name)} ${readyIcon}
+                    </div>
+                    ${statsBlock}
+                </div>
+            </div>
+        `;
+
+        return div;
+    }
+
     updatePlayersList(users) {
         const container = document.querySelector('.players-container');
         if (!container) return;
@@ -98,52 +177,52 @@ class DnDRoom {
             return;
         }
 
-        const classMap = {
-            'fighter': 'Воин',
-            'wizard': 'Волшебник',
-            'rogue': 'Плут',
-            'cleric': 'Жрец',
-            'ranger': 'Следопыт',
-            'paladin': 'Паладин',
-            'bard': 'Бард',
-            'barbarian': 'Варвар'
-        };
-
         users.forEach(user => {
-            const readyClass = user.is_ready ? 'bg-green-900 bg-opacity-20' : 'bg-gray-700';
-            const readyIcon = user.is_ready ? '<span class="ml-1 text-xs text-green-400">✅</span>' : '';
+            container.appendChild(this.renderPlayerRow(user));
+        });
+    }
 
-            let className = '';
-            if (user.character_class) {
-                className = classMap[user.character_class] || user.character_class;
+    /**
+     * Точечно обновляет HP-бар/текст конкретного игрока (без перерисовки всего
+     * списка) и показывает всплывающий тост урона/лечения/левел-апа.
+     */
+    applyStatChange(change) {
+        const row = document.querySelector(`.players-container [data-user-id="${change.user_id}"]`);
+        if (row) {
+            const hpText = row.querySelector('.hp-text');
+            const hpBar = row.querySelector('.hp-bar');
+            const pct = Math.max(0, Math.min(100, Math.round((change.current_hp / change.max_hp) * 100)));
+
+            if (hpText) {
+                const classLabel = hpText.querySelector('span')?.outerHTML || '';
+                hpText.innerHTML = `${classLabel} HP: ${change.current_hp}/${change.max_hp} | AC: ${change.armor_class}`;
             }
 
-            const stats = user.character_name ?
-                `<div class="text-xs text-gray-400 truncate">
-                    ${className ? '<span class="text-purple-400">' + className + '</span> | ' : ''}
-                    HP: ${user.current_hp}/${user.max_hp} | AC: ${user.armor_class}
-                </div>` : '';
+            if (hpBar) {
+                hpBar.style.width = pct + '%';
+                hpBar.className = `hp-bar h-1.5 rounded-full transition-all duration-500 ${this.hpBarColor(pct)}`;
+            }
+        }
 
-            const div = document.createElement('div');
-            div.className = `flex items-center justify-between p-2 ${readyClass} rounded-lg`;
-            div.dataset.userId = user.id;
+        if (change.hp_delta) {
+            this.showStatToast(change);
+        } else if (change.leveled_up) {
+            this.showStatToast({ ...change, hp_delta: 0 }, true);
+        }
+    }
 
-            div.innerHTML = `
-                <div class="flex items-center space-x-2 min-w-0 flex-1">
-                    <div class="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center text-xs sm:text-sm font-bold flex-shrink-0">
-                        ${this.escapeHtml((user.character_name || user.name).charAt(0))}
-                    </div>
-                    <div class="min-w-0 flex-1">
-                        <div class="font-medium text-xs sm:text-sm truncate">
-                            ${this.escapeHtml(user.character_name || user.name)} ${readyIcon}
-                        </div>
-                        ${stats}
-                    </div>
-                </div>
-            `;
+    showStatToast(change, isLevelUp = false) {
+        const isDamage = change.hp_delta < 0;
+        const div = document.createElement('div');
+        div.className = `fixed top-16 right-4 ${isLevelUp ? 'bg-purple-600' : (isDamage ? 'bg-red-600' : 'bg-green-600')} text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-fade-in text-sm`;
 
-            container.appendChild(div);
-        });
+        const label = isLevelUp
+            ? `⭐ ${this.escapeHtml(change.character_name)}: левел-ап!`
+            : `${isDamage ? '💥' : '💚'} ${this.escapeHtml(change.character_name)}: ${change.hp_delta > 0 ? '+' : ''}${change.hp_delta} HP`;
+
+        div.textContent = label;
+        document.body.appendChild(div);
+        setTimeout(() => div.remove(), 3500);
     }
 
     initGameChat() {
@@ -162,7 +241,6 @@ class DnDRoom {
 
             if (!message) return;
 
-            // БЛОКИРУЕМ ВСЁ до ответа мастера
             this.sendingGameMessage = true;
             input.disabled = true;
             submitBtn.disabled = true;
@@ -188,6 +266,7 @@ class DnDRoom {
                     if (data.system_message) this.addGameMessage(data.system_message);
                     if (data.ai_message) this.addGameMessage(data.ai_message);
                     if (data.roll) this.showRollResult(data.roll);
+                    (data.stat_changes || []).forEach((change) => this.applyStatChange(change));
                 } else {
                     this.showError(data.error || 'Ошибка при отправке сообщения');
                 }
@@ -195,7 +274,6 @@ class DnDRoom {
                 console.error('Error:', error);
                 this.showError('Ошибка соединения');
             } finally {
-                // Разблокируем ТОЛЬКО после ответа
                 this.sendingGameMessage = false;
                 input.disabled = false;
                 submitBtn.disabled = false;
@@ -260,8 +338,7 @@ class DnDRoom {
         if (!rollBtn) return;
 
         rollBtn.addEventListener('click', () => {
-            // НЕ ДАЁМ ЖАТЬ если уже отправляем или кнопка заблокирована
-            if (this.sendingGameMessage || rollBtn.disabled) return;
+            if (rollBtn.disabled) return;
 
             const input = document.getElementById('game-message-input');
             input.value = '/roll';
@@ -418,7 +495,15 @@ class DnDRoom {
 
 document.addEventListener('DOMContentLoaded', () => {
     const el = document.querySelector('[data-room-id]');
-    if (el) {
-        new DnDRoom(el.dataset.roomId, el.dataset.userId);
-    }
+
+    // Если на странице нет комнаты (логин, профиль, список комнат и т.д.) —
+    // room.js просто ничего не делает: ни Echo, ни Pusher, ни WS-соединения.
+    if (!el) return;
+
+    const room = new DnDRoom(el.dataset.roomId, el.dataset.userId);
+
+    // Закрываем WS-соединение при уходе со страницы — не держим сокет висящим
+    // после перехода на другую страницу (пока это классический MPA-переход,
+    // но на всякий случай, если позже добавится SPA-навигация без reload).
+    window.addEventListener('pagehide', () => room.disconnect());
 });

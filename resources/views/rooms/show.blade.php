@@ -167,6 +167,12 @@
                                     default => $characterClass,
                                 };
                             @endphp
+                            @php
+                                $maxHp = $user?->pivot->max_hp ?: 1;
+                                $currentHp = max(0, min($maxHp, $user?->pivot->current_hp ?? $maxHp));
+                                $hpPct = (int) round(($currentHp / $maxHp) * 100);
+                                $hpBarColor = $hpPct <= 25 ? 'bg-red-500' : ($hpPct <= 60 ? 'bg-yellow-500' : 'bg-green-500');
+                            @endphp
                             <div class="flex items-center justify-between p-2 {{ $user?->pivot->is_ready ? 'bg-green-900 bg-opacity-20' : 'bg-gray-700' }} rounded-lg" data-user-id="{{ $user->id }}">
                                 <div class="flex items-center space-x-2 min-w-0 flex-1">
                                     <div class="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center text-xs sm:text-sm font-bold flex-shrink-0">
@@ -180,11 +186,14 @@
                                             @endif
                                         </div>
                                         @if($user?->pivot->character_name)
-                                            <div class="text-xs text-gray-400 truncate">
+                                            <div class="text-xs text-gray-400 truncate hp-text">
                                                 @if($className)
                                                     <span class="text-purple-400">{{ $className }}</span> | 
                                                 @endif
-                                                HP: {{ $user?->pivot->current_hp }}/{{ $user?->pivot->max_hp }} | AC: {{ $user?->pivot->armor_class }}
+                                                HP: {{ $currentHp }}/{{ $maxHp }} | AC: {{ $user?->pivot->armor_class }}
+                                            </div>
+                                            <div class="w-full bg-gray-900 rounded-full h-1.5 mt-1 overflow-hidden">
+                                                <div class="hp-bar h-1.5 rounded-full transition-all duration-500 {{ $hpBarColor }}" style="width: {{ $hpPct }}%"></div>
                                             </div>
                                         @endif
                                     </div>

@@ -10,21 +10,10 @@ window.axios = axios;
 window.axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
 
 /**
- * Echo exposes an expressive API for subscribing to channels and listening
- * for events that are broadcast by Laravel. Echo and event broadcasting
- * allows your team to easily build robust real-time web applications.
+ * Echo/Pusher инициализация перенесена в resources/js/room.js — там же, где
+ * настроена авторизация приватных каналов (authEndpoint + X-CSRF-TOKEN).
+ * Раньше здесь создавался ВТОРОЙ, неавторизованный экземпляр Echo, который
+ * room.js молча перезатирал через window.Echo = ... — но открытое им
+ * WebSocket-соединение к Pusher оставалось висеть до закрытия вкладки
+ * (на КАЖДОЙ странице сайта, не только в комнате).
  */
-
-import Echo from 'laravel-echo';
-import Pusher from 'pusher-js';
-
-window.Pusher = Pusher;
-
-window.Echo = new Echo({
-    broadcaster: 'pusher',
-    // key: import.meta.env.VITE_PUSHER_APP_KEY,
-    key: '7ad02cc7a1ec4d3967c9',
-    // cluster: import.meta.env.VITE_PUSHER_APP_CLUSTER,
-    cluster: 'eu',
-    forceTLS: true
-});
