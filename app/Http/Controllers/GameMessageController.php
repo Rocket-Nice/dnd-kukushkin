@@ -47,6 +47,10 @@ class GameMessageController extends Controller
                 'success' => true,
                 'user_message' => $result['user_message'] ? $this->chat->formatMessage($result['user_message'], $room) : null,
                 'system_message' => $result['system_message'] ? $this->chat->formatMessage($result['system_message'], $room) : null,
+                'combat_messages' => array_map(
+                    fn ($m) => $this->chat->formatMessage($m, $room),
+                    $result['combat_messages'] ?? []
+                ),
                 'roll' => $result['roll'],
                 'ai_message' => $this->chat->formatMessage($result['ai_message'], $room),
                 'stat_changes' => $result['stat_changes'],

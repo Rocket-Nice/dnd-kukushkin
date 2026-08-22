@@ -11,11 +11,13 @@ class GameMasterService
 {
     protected DeepSeekService $deepSeek;
     protected CombatService $combat;
+    protected AttackService $attack;
 
-    public function __construct(DeepSeekService $deepSeek, CombatService $combat)
+    public function __construct(DeepSeekService $deepSeek, CombatService $combat, AttackService $attack)
     {
         $this->deepSeek = $deepSeek;
         $this->combat = $combat;
+        $this->attack = $attack;
     }
 
     public function generateIntro(Room $room): GameMessage
@@ -42,7 +44,7 @@ class GameMasterService
     }
 
     /**
-     * @return array{message: GameMessage, stat_changes: array}
+     * @return array{message: GameMessage, stat_changes: array, combat_messages: GameMessage[]}
      */
     public function processMessage(Room $room, User $user, string $userMessage, ?string $rollResult = null): array
     {
@@ -116,7 +118,7 @@ class GameMasterService
         }
 
         $rawResponse = $this->deepSeek->chat($messages);
-        $parsed = $this->extractStateChanges($rawResponse);
+        $parsed = $this->extractDirectives($rawResponse);
 
         $aiMessage = GameMessage::create([
             'room_id' => $room->id,
@@ -124,44 +126,93 @@ class GameMasterService
             'content' => $parsed['content'] !== '' ? $parsed['content'] : $rawResponse,
         ]);
 
-        $statChanges = $this->combat->applyStateChanges($room, $parsed['changes']);
+        $statChanges = $this->combat->applyStateChanges($room, $parsed['directives']['STATE']);
+        $combatMessages = [];
+
+        foreach ($parsed['directives']['ATTACK'] as $atk) {
+            if (empty($atk['attacker']) || empty($atk['target'])) {
+                continue;
+            }
+
+            $result = $this->attack->resolveNpcAttackOnCharacter(
+                $room,
+                (string) $atk['attacker'],
+                (string) $atk['target'],
+                (int) ($atk['attack_bonus'] ?? 3),
+                (string) ($atk['damage_dice'] ?? '1d6'),
+                (int) ($atk['damage_bonus'] ?? 0)
+            );
+
+            if ($result === null) {
+                Log::warning('GameMasterService: неизвестная цель в ATTACK-блоке', [
+                    'room_id' => $room->id,
+                    'target' => $atk['target'],
+                ]);
+                continue;
+            }
+
+            $combatMessages[] = GameMessage::create([
+                'room_id' => $room->id,
+                'role' => 'system',
+                'content' => $this->attack->formatMessage($result, (string) $atk['target']),
+            ]);
+
+            if ($result['hit'] && $result['damage'] > 0) {
+                $hpChanges = $this->combat->applyStateChanges($room, [
+                    ['character' => (string) $atk['target'], 'hp_delta' => -$result['damage']],
+                ]);
+                $statChanges = [...$statChanges, ...$hpChanges];
+            }
+        }
+
+        if ($parsed['directives']['PENDING_ATTACK']) {
+            $this->attack->storePendingAttack($room, $user->id, $parsed['directives']['PENDING_ATTACK']);
+        }
 
         return [
             'message' => $aiMessage,
             'stat_changes' => $statChanges,
+            'combat_messages' => $combatMessages,
         ];
     }
 
     /**
-     * Вырезает служебный [[STATE:{...}]] блок из ответа модели и парсит его.
-     * Если блока нет или JSON битый — просто нет изменений, чат не ломается.
+     * Вырезает служебные блоки [[STATE:{...}]] / [[ATTACK:{...}]] / [[PENDING_ATTACK:{...}]]
+     * с конца ответа модели (может быть несколько подряд, по одному на строку).
+     * Битый JSON или отсутствие блока — не ошибка, просто нет соответствующих изменений.
      *
-     * @return array{content: string, changes: array}
+     * @return array{content: string, directives: array{STATE: array, ATTACK: array, PENDING_ATTACK: ?array}}
      */
-    private function extractStateChanges(string $raw): array
+    private function extractDirectives(string $raw): array
     {
-        $trimmed = trim($raw);
+        $content = trim($raw);
+        $directives = ['STATE' => [], 'ATTACK' => [], 'PENDING_ATTACK' => null];
 
-        if (!preg_match('/\[\[STATE:(\{.*\})\]\]\s*$/s', $trimmed, $matches)) {
-            return ['content' => $trimmed, 'changes' => []];
-        }
+        while (preg_match('/\n?\[\[(STATE|ATTACK|PENDING_ATTACK):(\{.*\})\]\]\s*$/s', $content, $m)) {
+            $type = $m[1];
+            $json = $m[2];
+            $content = trim(substr($content, 0, -strlen($m[0])));
 
-        $content = trim(substr($trimmed, 0, -strlen($matches[0])));
-        $changes = [];
-
-        try {
-            $decoded = json_decode($matches[1], true, 8, JSON_THROW_ON_ERROR);
-            if (is_array($decoded['changes'] ?? null)) {
-                $changes = $decoded['changes'];
+            try {
+                $decoded = json_decode($json, true, 8, JSON_THROW_ON_ERROR);
+            } catch (\JsonException $e) {
+                Log::warning("GameMasterService: не удалось распарсить {$type}-блок", [
+                    'raw' => $json,
+                    'error' => $e->getMessage(),
+                ]);
+                continue;
             }
-        } catch (\JsonException $e) {
-            Log::warning('GameMasterService: не удалось распарсить STATE-блок', [
-                'raw' => $matches[1],
-                'error' => $e->getMessage(),
-            ]);
+
+            if ($type === 'STATE' && is_array($decoded['changes'] ?? null)) {
+                $directives['STATE'] = $decoded['changes'];
+            } elseif ($type === 'ATTACK' && is_array($decoded['attacks'] ?? null)) {
+                $directives['ATTACK'] = $decoded['attacks'];
+            } elseif ($type === 'PENDING_ATTACK' && is_array($decoded)) {
+                $directives['PENDING_ATTACK'] = $decoded;
+            }
         }
 
-        return ['content' => $content, 'changes' => $changes];
+        return ['content' => $content, 'directives' => $directives];
     }
 
     protected function buildSystemPrompt(Room $room, $currentCharacter, $allCharacters, $currentUser): string
@@ -188,50 +239,50 @@ class GameMasterService
 ПРАВИЛА:
 1. Отвечай КРАТКО (2-4 предложения)
 2. Создавай интересные вызовы и развивай сюжет
-3. Когда нужна проверка навыка, скажи: "Для этого нужна проверка [навыка]. Сложность: X" (X от 5 до 20)
+3. Когда нужна проверка навыка (НЕ атака), скажи: "Для этого нужна проверка [навыка]. Сложность: X" (X от 5 до 20)
 4. Давай игрокам выбор (2-3 варианта)
 5. НИКОГДА не отвечай за персонажей игроков. Только описывай мир, NPC и последствия
 6. Ты управляешь NPC
 7. Учитывай текущее состояние HP и AC в описаниях
-8. Если игрок бросил кубик (ты увидишь системное сообщение с результатом), опиши результат в контексте происходящего
-9. Обращайся к персонажам по их именам, указанным выше
-10. Помни, что **{$currentCharacter->character_name}** - это текущий действующий игрок
+8. Обращайся к персонажам по их именам, указанным выше
+9. Помни, что **{$currentCharacter->character_name}** - это текущий действующий игрок
 
-ИЗМЕНЕНИЯ ХАРАКТЕРИСТИК (ОБЯЗАТЕЛЬНО, СТРОГОЕ ПРАВИЛО):
-Если в ТЕКСТЕ твоего ответа персонаж хоть как-то получил урон, вылечился, выпил зелье/применил лечение,
-использовал магию с эффектом на HP/AC, или произошёл левел-ап — ты ОБЯЗАН отразить это числом в STATE-блоке.
-Нельзя писать "рана начинает затягиваться" / "ты чувствуешь себя лучше" / "эликсир исцеляет тебя" и НЕ дать
-положительный hp_delta. Нельзя писать "меч пронзает плечо" / "ты получаешь удар" и НЕ дать отрицательный hp_delta.
-Текст без цифры в STATE — это ошибка, а не стиль повествования.
+БОЕВАЯ МЕХАНИКА (ОБЯЗАТЕЛЬНО, ТРИ ТИПА СЛУЖЕБНЫХ БЛОКОВ):
 
-Ориентиры по величине (если не задано иное по сюжету):
-- Лёгкий урон (царапина, слабый удар NPC): -3..-8
-- Серьёзный урон (удар оружием, попадание заклинания): -8..-15
-- Тяжёлый/критический урон: -15..-30
-- Обычное лечебное зелье/заклинание: +10..+20
-- Долгий отдых/сильное исцеление: +20..+35
-- Левел-ап: max_hp_delta +5..+15 (используется редко, только при явном сюжетном триггере)
+Броски кубиков ты НИКОГДА не считаешь и не придумываешь сам — их бросает сервер.
+Твоя задача — только описать намерение (кто атакует, с каким бонусом, какими костями
+урона) в служебном блоке. Сервер сам бросит кубики и покажет игрокам честный результат.
+Никогда не пиши в тексте сцены готовый результат броска ("ты попадаешь и наносишь 8 урона") —
+опиши только сам момент атаки, а числа появятся из блока.
 
-В САМОМ КОНЦЕ ответа, отдельной последней строкой, добавь служебный блок в точном формате:
+1) STATE — для изменений HP/AC/max_hp БЕЗ броска (лечебное зелье, эффект окружения,
+   левел-ап). ВСЕГДА добавляй этот блок последней строкой, даже если менять нечего:
+   [[STATE:{"changes":[{"character":"Имя","hp_delta":15}]}]]
+   Если ничего не изменилось: [[STATE:{"changes":[]}]]
+   ВАЖНО: если урон/лечение уже относится к блоку ATTACK или PENDING_ATTACK ниже —
+   НЕ дублируй его здесь, сервер сам применит урон от боевых бросков.
 
-[[STATE:{"changes":[{"character":"Точное имя персонажа из списка выше","hp_delta":-8}]}]]
+2) ATTACK — когда NPC атакует персонажа игрока в этот ход. Добавляй, только когда
+   по сюжету NPC ДЕЙСТВИТЕЛЬНО атакует прямо сейчас:
+   [[ATTACK:{"attacks":[{"attacker":"Гоблин","target":"Точное имя персонажа из списка выше","attack_bonus":3,"damage_dice":"1d6","damage_bonus":1}]}]]
+   - "attack_bonus": бонус атаки NPC (слабый враг 1-3, средний 3-6, опасный 6-10)
+   - "damage_dice": кости урона в формате "XdY" (1d4, 1d6, 1d8, 2d6 и т.п.), под оружие/природу NPC
+   - "damage_bonus": плоский бонус к урону (обычно 0-3)
+   AC цели указывать не нужно — сервер возьмёт актуальный AC персонажа сам.
+   Если в этот ход ни один NPC не атаковал — просто не добавляй этот блок вообще.
 
-Примеры (только для понимания формата, не копируй содержание):
-- Игрок пишет "бью гоблина мечом", в тексте гоблин бьёт в ответ и ранит игрока:
-  [[STATE:{"changes":[{"character":"Арагорн","hp_delta":-10}]}]]
-- Игрок пишет "пью лечебное зелье", в тексте описано исцеление:
-  [[STATE:{"changes":[{"character":"Арагорн","hp_delta":15}]}]]
-- Ничего механически не изменилось (просто диалог, осмотр комнаты):
-  [[STATE:{"changes":[]}]]
+3) PENDING_ATTACK — когда игрок пытается атаковать NPC (написал "бью мечом",
+   "стреляю из лука", "атакую" и т.п.) и ты даёшь ему возможность бросить атаку:
+   [[PENDING_ATTACK:{"npc_name":"Гоблин","target_ac":13,"damage_dice":"1d8","damage_bonus":2}]]
+   Сервер сохранит это и, когда игрок нажмёт бросок кубика, автоматически бросит
+   d20 + боевой бонус персонажа против target_ac, а при попадании — урон по этим
+   костям. Тебе не нужно ничего считать самому — просто укажи AC цели (подбери
+   разумное значение под противника, обычно 10-18) и кости урона под оружие/способность
+   персонажа. Добавляй этот блок, только когда игрок реально пытается атаковать NPC.
 
-Правила блока:
-- "character" — точное имя персонажа, как указано в списке персонажей выше
-- "hp_delta" — целое число, на сколько меняется ТЕКУЩЕЕ HP (отрицательное = урон, положительное = лечение), диапазон от -50 до 50
-- "ac_delta" — опционально, изменение брони (например, эффект заклинания), диапазон от -10 до 10
-- "max_hp_delta" — опционально, ТОЛЬКО для левел-апа/постоянного усиления, положительное число, диапазон от 0 до 50
-- Можно указать несколько персонажей в массиве "changes", если урон/эффект затронул нескольких
-- Если за этот ход ничего механически не изменилось — всё равно добавь блок с пустым массивом: [[STATE:{"changes":[]}]]
-- Эта строка служебная — никогда не пересказывай и не объясняй её в тексте сцены, она не видна игрокам
+Можно добавить STATE (обязательно) и при необходимости ATTACK и/или PENDING_ATTACK —
+каждый отдельной строкой в конце ответа, в любом порядке между собой, но STATE
+должен идти самым последним.
 
 Мастер-промт: {$basePrompt}
 PROMPT;

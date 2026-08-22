@@ -264,6 +264,7 @@ class DnDRoom {
 
                     if (data.user_message) this.addGameMessage(data.user_message);
                     if (data.system_message) this.addGameMessage(data.system_message);
+                    (data.combat_messages || []).forEach((m) => this.addGameMessage(m));
                     if (data.ai_message) this.addGameMessage(data.ai_message);
                     if (data.roll) this.showRollResult(data.roll);
                     (data.stat_changes || []).forEach((change) => this.applyStatChange(change));

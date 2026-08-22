@@ -24,10 +24,63 @@ class Room extends Model
 
     /**
      * Кэш имён персонажей в рамках текущего запроса (не путать с Cache-фасадом).
-     * Позволяет не долбить БД по разу на каждое сообщение в истории.
+     * Позволяет не долбить БД по разу на каждое сообщение в истории, и даёт
+     * обратный поиск user_id по имени персонажа (нужен для боевой механики —
+     * атака NPC резолвится против AC персонажа, найденного по имени из ответа ИИ).
      */
     private array $characterNamesMap = [];
+    private array $userIdsByCharacterName = [];
     private bool $characterNamesLoaded = false;
+
+    private function loadCharacterNames(): void
+    {
+        if ($this->characterNamesLoaded) {
+            return;
+        }
+
+        $rows = DB::table('room_user')
+            ->where('room_id', $this->id)
+            ->get(['user_id', 'character_name']);
+
+        foreach ($rows as $row) {
+            $this->characterNamesMap[$row->user_id] = $row->character_name ?: null;
+
+            if ($row->character_name) {
+                $this->userIdsByCharacterName[$row->character_name] = $row->user_id;
+            }
+        }
+
+        $this->characterNamesLoaded = true;
+    }
+
+    /**
+     * Единая точка получения имени персонажа по user_id в рамках комнаты.
+     * Заменяет разбросанные по контроллерам/событиям обращения к pivot
+     * (важно: у GameMessage/OocMessage user() — обычный belongsTo,
+     * у него НЕТ pivot, поэтому $message->user->pivot всегда был null).
+     */
+    public function characterNameForUser(?int $userId): ?string
+    {
+        if ($userId === null) {
+            return null;
+        }
+
+        $this->loadCharacterNames();
+
+        return $this->characterNamesMap[$userId] ?? null;
+    }
+
+    /**
+     * Обратный поиск: user_id по точному имени персонажа. Используется
+     * боевой механикой, чтобы резолвить атаку NPC на персонажа по имени,
+     * которое дал ИИ, против реального AC из БД.
+     */
+    public function userIdForCharacterName(string $characterName): ?int
+    {
+        $this->loadCharacterNames();
+
+        return $this->userIdsByCharacterName[$characterName] ?? null;
+    }
 
     public function creator()
     {
@@ -78,30 +131,4 @@ class Room extends Model
         return $this->users()->where('user_id', $userId)->exists();
     }
 
-    /**
-     * Единая точка получения имени персонажа по user_id в рамках комнаты.
-     * Заменяет разбросанные по контроллерам/событиям обращения к pivot
-     * (важно: у GameMessage/OocMessage user() — обычный belongsTo,
-     * у него НЕТ pivot, поэтому $message->user->pivot всегда был null).
-     */
-    public function characterNameForUser(?int $userId): ?string
-    {
-        if ($userId === null) {
-            return null;
-        }
-
-        if (! $this->characterNamesLoaded) {
-            $rows = DB::table('room_user')
-                ->where('room_id', $this->id)
-                ->get(['user_id', 'character_name']);
-
-            foreach ($rows as $row) {
-                $this->characterNamesMap[$row->user_id] = $row->character_name ?: null;
-            }
-
-            $this->characterNamesLoaded = true;
-        }
-
-        return $this->characterNamesMap[$userId] ?? null;
-    }
 }
